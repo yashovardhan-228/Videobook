@@ -24,7 +24,7 @@ const registerUser= asyncHandler( async (req, res)=>{
         throw new ApiError(400, "All fields are required")
     }
 
-    const existingUser= User.findOne({
+    const existingUser= await User.findOne({
         $or: [{username}, {email}]
     })
     if(existingUser){
@@ -32,8 +32,13 @@ const registerUser= asyncHandler( async (req, res)=>{
     }
 
 
-    const avatarLocalPath= req.files?.avatar[0].path
-    const coverImageLocalPath= req.files?.coverImage[0].path
+    const avatarLocalPath= req.files?.avatar[0]?.path
+    // const coverImageLocalPath= req.files?.coverImage[0].path   //since coverimage is not required so if user does not provide so this way creates undefined error. So we check for it manually using if else.
+
+    let coverImageLocalPath;
+    if(req.files && Array.isArray(req.files.coverImage) && req.files.coverImage.length>0){
+        coverImageLocalPath= req.files.coverImage[0].path;
+    }
 
     if(!avatarLocalPath){
         throw new ApiError(400, "Avatar is required")
@@ -50,7 +55,7 @@ const registerUser= asyncHandler( async (req, res)=>{
         fullname,
         avatar: avatar.url,
         username: username.toLowerCase(),
-        coverImage: coverImage.url || "",
+        coverImage: coverImage?.url || "",
         email,
         password
     })
