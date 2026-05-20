@@ -4,6 +4,7 @@ import { User } from "../Models/user.model.js";
 import { uploadOnCloudinary } from "../Utils/cloudinary.js";
 import { ApiResponse } from "../Utils/ApiResponse.js";
 import jwt from "jsonwebtoken";
+import mongoose, { Mongoose } from "mongoose";
 
 const generateAccessAndRefreshTokens= async(userId)=>{
     try {
@@ -257,7 +258,7 @@ const updateAccountDetails= asyncHandler(async (req, res)=>{
         throw new ApiError(400, "All fields are required")
     }
 
-    const user= User.findByIdAndUpdate(
+    const user= await User.findByIdAndUpdate(
         req.user?._id,
         {
             $set: {
@@ -341,6 +342,133 @@ const updateCoverImage= asyncHandler( async(req, res)=>{
     )
 })
 
+
+const getUserChannelProfile= asyncHandler(async (req, res)=>{
+    const {username}= req.params   //because generally we have to call this method when a particular url is hit and from that url we will take out username. So that's why req.params
+
+    if(!username?.trim()){
+        throw new ApiError(404, "Username is missing")
+    }
+
+    const channel= User.aggregate([    //this aggregate returns array. But in this case only one element will be there.
+        {
+            $match : {username : username?.toLowerCase()}  //to find channel with this username
+        },     //at this moment we have only ne document with corresponding username. So now we will apply 2nd stage of this pipeline i.e. lookup
+        {    //here starts 2nd stage lookup( i.e. connecting both doc for getting channel details like subscribers(count) from subscription schema   with corresponding username)
+            $lookup:{
+                from : "subscriptions",    //as Subscription model will be stored as subscriptions in mongo db
+                localField: "_id",
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },    //now we have got the channel in subscription schema for this username. We will count it also later on.
+        {     // this stage is to find how many channels does that username has subscribed.
+            $lookup:{
+                from: "subscriptions",
+                localField: "_id",
+                foreignField: "subscriber",
+                as: "subscribedTo"
+            }
+        },
+        {
+            $addFields: { //to keep existing fields and add new fields 
+                subscribersCount: {
+                    $size: "$subscribers"   //to count we use operator size. And now $subscribers because its a field now.
+                },
+                channelsSubscribedToCount: {
+                    $size: "$subscribedTo"
+                },
+                isSubscribed: {
+                    $cond: {   //condition
+                        if: {$in: [req.user?._id, "$subscribers.subscriber"]},
+                        then: true,
+                        else: false
+                    }
+                }  ////these three fields are added to existing user document.
+            }
+        },
+        {
+            $project: {     //projects only selected fields not all fields
+                fullname: 1,
+                username: 1,
+                subscribersCount: 1,
+                channelsSubscribedToCount: 1,
+                isSubscribed: 1,
+                avatar: 1,
+                coverImage: 1,
+                email: 1     //now only these fields will be sent. Because only these fields are relevant to a channels page.
+            }
+        }
+    ])
+
+    if(!channel?.length){
+        throw new ApiError(404, "Channel Does not exist")
+    }
+
+    return res.status(200)
+    .json(
+        new ApiResponse(
+            200,
+            channel[0],   //instead of returning whole array only first element is returned for frontend's sake.
+            "User Channel Fetched Successfully"
+        )
+    )
+})
+
+const getWatchHistory= asyncHandler(async(req, res)=>{
+
+    const user= await User.aggregate([
+        {
+            $match: {
+                _id: new mongoose.Types.ObjectId(req.user._id)
+            }
+        },
+        {
+            $lookup: {
+                from: "videos",   //Video  model is stored as videos
+                localField: "watchHistory",
+                foreignField: "_id",
+                as: "watchHistory",
+                pipeline: [   //nested pipeline because every video in watch history itself has owner field which is user only.
+                    {
+                        $lookup: {
+                            from: "users",
+                            localField: "owner",
+                            foreignField: "_id",
+                            as: "owner",
+                            pipeline:[    //to remove unnecessary infos of user from shared in owner field and for that we  will use project
+                                {
+                                    $project: {
+                                        fullname: 1,
+                                        username: 1,
+                                        avatar: 1
+                                    }   //now owner field does not have irrelevant info about owner due to sub pipeline
+                                }   
+                            ]
+                        }
+                    },
+                    {  //now this stage is just to return first value from the array.
+                        $addFields: {
+                            owner: {  //overwriting owner with only first element(json data) not giving complete array to frontend
+                                $first: "$owner"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    ])
+
+    return res.status(200)
+    .json(
+        new ApiResponse(
+            200,
+            user[0].getWatchHistory,
+            "Watch History Fetched Successfully"
+        )
+    )
+})
+
 export {
     registerUser,
     loginUser,
@@ -350,5 +478,7 @@ export {
     getCurrentUser,
     updateAccountDetails,
     updateAvatar,
-    updateCoverImage
+    updateCoverImage,
+    getUserChannelProfile,
+    getWatchHistory
 }
